@@ -1,0 +1,311 @@
+import React, { useMemo, useState } from "react";
+import { motion } from "framer-motion";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Button } from "@/components/ui/button";
+import { Badge } from "@/components/ui/badge";
+import { RotateCcw, Dice6, Trophy, Users } from "lucide-react";
+
+const COLORS = [
+  { id: "red", name: "Red", base: "bg-red-500", soft: "bg-red-100", text: "text-red-700" },
+  { id: "green", name: "Green", base: "bg-green-500", soft: "bg-green-100", text: "text-green-700" },
+  { id: "yellow", name: "Yellow", base: "bg-yellow-400", soft: "bg-yellow-100", text: "text-yellow-700" },
+  { id: "blue", name: "Blue", base: "bg-blue-500", soft: "bg-blue-100", text: "text-blue-700" },
+];
+
+const PATH_LENGTH = 24;
+const TOKENS_PER_PLAYER = 4;
+
+function createInitialPlayers() {
+  return COLORS.map((color) => ({
+    ...color,
+    finished: 0,
+    tokens: Array.from({ length: TOKENS_PER_PLAYER }, (_, i) => ({
+      id: `${color.id}-${i}`,
+      steps: -1, // -1 = home, 0..23 = board, 24 = finished
+    })),
+  }));
+}
+
+function getGlobalPosition(playerIndex, steps) {
+  return (playerIndex * 6 + steps) % PATH_LENGTH;
+}
+
+function sameSpot(a, b) {
+  return a.position === b.position;
+}
+
+export default function LudoGameApp() {
+  const [players, setPlayers] = useState(createInitialPlayers);
+  const [currentPlayer, setCurrentPlayer] = useState(0);
+  const [dice, setDice] = useState(null);
+  const [message, setMessage] = useState("Roll the dice to start the game.");
+  const [winner, setWinner] = useState(null);
+  const [mustMove, setMustMove] = useState(false);
+
+  const boardMap = useMemo(() => {
+    const map = Array.from({ length: PATH_LENGTH }, (_, i) => ({ index: i, tokens: [] }));
+    players.forEach((player, pIndex) => {
+      player.tokens.forEach((token) => {
+        if (token.steps >= 0 && token.steps < PATH_LENGTH) {
+          const position = getGlobalPosition(pIndex, token.steps);
+          map[position].tokens.push({ ...token, color: player.base, name: player.name, playerIndex: pIndex, position });
+        }
+      });
+    });
+    return map;
+  }, [players]);
+
+  const current = players[currentPlayer];
+
+  const movableTokens = useMemo(() => {
+    if (dice == null || winner) return [];
+    return current.tokens.filter((token) => {
+      if (token.steps === -1) return dice === 6;
+      if (token.steps >= PATH_LENGTH) return false;
+      return token.steps + dice <= PATH_LENGTH;
+    });
+  }, [current, dice, winner]);
+
+  const nextTurn = (extraTurn = false) => {
+    if (winner) return;
+    setDice(null);
+    setMustMove(false);
+    if (!extraTurn) {
+      setCurrentPlayer((prev) => (prev + 1) % players.length);
+    }
+  };
+
+  const rollDice = () => {
+    if (dice !== null || winner) return;
+    const value = Math.floor(Math.random() * 6) + 1;
+    setDice(value);
+
+    const canMove = current.tokens.some((token) => {
+      if (token.steps === -1) return value === 6;
+      if (token.steps >= PATH_LENGTH) return false;
+      return token.steps + value <= PATH_LENGTH;
+    });
+
+    if (!canMove) {
+      setMessage(`${current.name} rolled ${value}. No valid move. Turn passes.`);
+      setTimeout(() => nextTurn(false), 900);
+      return;
+    }
+
+    setMustMove(true);
+    setMessage(`${current.name} rolled ${value}. Select a token to move.`);
+  };
+
+  const moveToken = (tokenId) => {
+    if (dice == null || winner || !mustMove) return;
+
+    const player = players[currentPlayer];
+    const token = player.tokens.find((t) => t.id === tokenId);
+    if (!token) return;
+
+    const isValid = token.steps === -1 ? dice === 6 : token.steps + dice <= PATH_LENGTH;
+    if (!isValid || token.steps >= PATH_LENGTH) return;
+
+    const updatedPlayers = players.map((p) => ({
+      ...p,
+      tokens: p.tokens.map((t) => ({ ...t })),
+    }));
+
+    const movingToken = updatedPlayers[currentPlayer].tokens.find((t) => t.id === tokenId);
+    let extraTurn = dice === 6;
+
+    if (movingToken.steps === -1) {
+      movingToken.steps = 0;
+    } else {
+      movingToken.steps += dice;
+    }
+
+    if (movingToken.steps === PATH_LENGTH) {
+      updatedPlayers[currentPlayer].finished += 1;
+      setMessage(`${player.name} moved a token home!`);
+    } else {
+      const movedGlobal = getGlobalPosition(currentPlayer, movingToken.steps);
+      updatedPlayers.forEach((otherPlayer, pIndex) => {
+        if (pIndex === currentPlayer) return;
+        otherPlayer.tokens.forEach((otherToken) => {
+          if (otherToken.steps >= 0 && otherToken.steps < PATH_LENGTH) {
+            const otherGlobal = getGlobalPosition(pIndex, otherToken.steps);
+            if (movedGlobal === otherGlobal) {
+              otherToken.steps = -1;
+              extraTurn = true;
+              setMessage(`${player.name} captured ${otherPlayer.name}'s token!`);
+            }
+          }
+        });
+      });
+    }
+
+    const hasWon = updatedPlayers[currentPlayer].finished === TOKENS_PER_PLAYER;
+    setPlayers(updatedPlayers);
+
+    if (hasWon) {
+      setWinner(updatedPlayers[currentPlayer]);
+      setMessage(`${updatedPlayers[currentPlayer].name} wins the game!`);
+      setDice(null);
+      setMustMove(false);
+      return;
+    }
+
+    if (!message.includes("captured") && movingToken.steps !== PATH_LENGTH) {
+      setMessage(`${player.name} moved token ${dice} step${dice > 1 ? "s" : ""}.`);
+    }
+
+    setTimeout(() => nextTurn(extraTurn), 500);
+  };
+
+  const resetGame = () => {
+    setPlayers(createInitialPlayers());
+    setCurrentPlayer(0);
+    setDice(null);
+    setWinner(null);
+    setMustMove(false);
+    setMessage("Game reset. Red starts.");
+  };
+
+  const renderCell = (cell) => {
+    const stacked = cell.tokens;
+    return (
+      <div
+        key={cell.index}
+        className="relative aspect-square rounded-2xl border border-slate-200 bg-white shadow-sm flex items-center justify-center"
+      >
+        <span className="absolute top-1 left-2 text-[10px] text-slate-400">{cell.index + 1}</span>
+        <div className="flex flex-wrap gap-1 items-center justify-center px-1">
+          {stacked.map((token) => (
+            <motion.div
+              key={token.id}
+              layout
+              initial={{ scale: 0.8, opacity: 0.6 }}
+              animate={{ scale: 1, opacity: 1 }}
+              className={`h-4 w-4 rounded-full ${token.color} ring-2 ring-white`}
+              title={`${token.name} token`}
+            />
+          ))}
+        </div>
+      </div>
+    );
+  };
+
+  return (
+    <div className="min-h-screen bg-slate-50 p-4 md:p-8">
+      <div className="max-w-7xl mx-auto grid grid-cols-1 xl:grid-cols-[360px_1fr] gap-6">
+        <Card className="rounded-3xl shadow-xl border-0">
+          <CardHeader>
+            <CardTitle className="flex items-center gap-3 text-2xl">
+              <Users className="h-7 w-7" />
+              Ludo Game App
+            </CardTitle>
+          </CardHeader>
+          <CardContent className="space-y-5">
+            <div className="p-4 rounded-2xl bg-slate-100">
+              <div className="text-sm text-slate-500 mb-1">Current Turn</div>
+              <div className="text-2xl font-bold flex items-center gap-3">
+                <span className={`inline-block h-4 w-4 rounded-full ${current.base}`} />
+                {current.name}
+              </div>
+            </div>
+
+            <div className="grid grid-cols-2 gap-3">
+              <Button className="rounded-2xl h-14 text-base" onClick={rollDice} disabled={dice !== null || !!winner}>
+                <Dice6 className="mr-2 h-5 w-5" /> Roll Dice
+              </Button>
+              <Button variant="outline" className="rounded-2xl h-14 text-base" onClick={resetGame}>
+                <RotateCcw className="mr-2 h-5 w-5" /> Reset
+              </Button>
+            </div>
+
+            <div className="rounded-2xl border bg-white p-4">
+              <div className="text-sm text-slate-500">Dice Value</div>
+              <div className="text-5xl font-black mt-2">{dice ?? "-"}</div>
+            </div>
+
+            <div className="rounded-2xl bg-slate-900 text-white p-4 min-h-[100px]">
+              <div className="text-sm text-slate-300 mb-2">Game Status</div>
+              <p className="leading-6">{message}</p>
+            </div>
+
+            {winner && (
+              <div className="rounded-2xl p-4 border bg-emerald-50">
+                <div className="flex items-center gap-2 text-lg font-bold">
+                  <Trophy className="h-5 w-5" /> {winner.name} Wins!
+                </div>
+                <p className="text-sm text-slate-600 mt-1">All 4 tokens reached home.</p>
+              </div>
+            )}
+
+            <div className="space-y-3">
+              {players.map((player, pIndex) => (
+                <div key={player.id} className={`rounded-2xl p-4 ${player.soft}`}>
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center gap-2 font-semibold">
+                      <span className={`inline-block h-4 w-4 rounded-full ${player.base}`} />
+                      {player.name}
+                    </div>
+                    <Badge variant="secondary">Home: {player.finished}/4</Badge>
+                  </div>
+
+                  <div className="mt-3 flex flex-wrap gap-2">
+                    {player.tokens.map((token, idx) => {
+                      const active = pIndex === currentPlayer && movableTokens.some((t) => t.id === token.id);
+                      const status = token.steps === -1 ? "Home" : token.steps === PATH_LENGTH ? "Finished" : `Step ${token.steps}`;
+                      return (
+                        <button
+                          key={token.id}
+                          onClick={() => active && moveToken(token.id)}
+                          className={`px-3 py-2 rounded-xl border text-sm transition ${
+                            active ? "bg-white border-slate-900 shadow-md scale-105" : "bg-white/70 border-white"
+                          }`}
+                        >
+                          <div className="font-medium">Token {idx + 1}</div>
+                          <div className="text-xs text-slate-500">{status}</div>
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+              ))}
+            </div>
+          </CardContent>
+        </Card>
+
+        <Card className="rounded-3xl shadow-xl border-0">
+          <CardHeader>
+            <CardTitle className="text-2xl">Game Board</CardTitle>
+          </CardHeader>
+          <CardContent>
+            <div className="grid grid-cols-6 md:grid-cols-8 gap-3">
+              {boardMap.map(renderCell)}
+            </div>
+            <div className="mt-6 grid grid-cols-1 md:grid-cols-2 gap-4">
+              <div className="rounded-2xl border p-4 bg-slate-50">
+                <h3 className="font-bold mb-2">How this version works</h3>
+                <ul className="text-sm text-slate-600 space-y-2 list-disc ml-5">
+                  <li>4 players: Red, Green, Yellow, Blue</li>
+                  <li>Roll 6 to bring a token out from home</li>
+                  <li>Capture an opponent by landing on the same square</li>
+                  <li>Roll 6 or capture to get an extra turn</li>
+                  <li>First player to send all 4 tokens home wins</li>
+                </ul>
+              </div>
+              <div className="rounded-2xl border p-4 bg-slate-50">
+                <h3 className="font-bold mb-2">Next upgrades you can add</h3>
+                <ul className="text-sm text-slate-600 space-y-2 list-disc ml-5">
+                  <li>Real classic cross-shaped Ludo board</li>
+                  <li>Single-player mode with AI</li>
+                  <li>Online multiplayer with Socket.IO</li>
+                  <li>Sound effects and animations</li>
+                  <li>User login and match history</li>
+                </ul>
+              </div>
+            </div>
+          </CardContent>
+        </Card>
+      </div>
+    </div>
+  );
+}
