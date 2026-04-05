@@ -77,4 +77,4 @@ Ludo is a strategy board game for 4 players (controlled via turns). The goal is 
 
 ---
 
-Built with ❤️ by [Antigravity](https://github.com/google-deepmind) and the USER.
+
